@@ -78,9 +78,9 @@ static Magick::Image PrepareImageForMatrix(const Magick::Image &image,
   // matrix is typically landscape at 64x32, so rotating once fixes the
   // sideways rendering.
   if (image_is_portrait && matrix_is_landscape) {
-    prepared.rotate(90.0);
+    prepared.rotate(270.0);
   } else if (!image_is_portrait && !matrix_is_landscape) {
-    prepared.rotate(-90.0);
+    prepared.rotate(-270.0);
   }
 
   return prepared;
