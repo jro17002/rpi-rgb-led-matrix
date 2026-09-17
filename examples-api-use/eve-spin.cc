@@ -142,9 +142,11 @@ static ImageVector LoadImageAndScaleImage(const char *filename,
 // interface as well as the FrameCanvas we use in the double-buffering of the
 // animated image.
 void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
-  const int offset_x = 0, offset_y = 0;  // If you want to move the image.
-  for (size_t y = 0; y < image.rows(); ++y) {
-    for (size_t x = 0; x < image.columns(); ++x) {
+  const int src_w = image.columns();
+  const int src_h = image.rows();
+
+  for (int y = 0; y < src_h; ++y) {
+    for (int x = 0; x < src_w; ++x) {
       const Magick::Color &c = image.pixelColor(x, y);
       if (c.alphaQuantum() < 256) {
         const int red = ScaleQuantumToChar(c.redQuantum());
@@ -155,7 +157,11 @@ void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
           continue;  // Skip black pixels: they do not need to be lit.
         }
 
-        canvas->SetPixel(x + offset_x, y + offset_y, red, green, blue);
+        // Rotate the source image 90 degrees counter-clockwise to fit the
+        // 64x32 portrait matrix layout.
+        const int dst_x = src_h - 1 - y;
+        const int dst_y = x;
+        canvas->SetPixel(dst_x, dst_y, red, green, blue);
       }
     }
   }
@@ -165,12 +171,15 @@ void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
 // We're using double-buffering and fill an offscreen buffer first, then show.
 void ShowAnimatedImage(const ImageVector &images, RGBMatrix *matrix) {
   FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
+  const int kFrameDelayUs = 1000000;  // 1 FPS
+
   while (!interrupt_received) {
     for (const auto &image : images) {
       if (interrupt_received) break;
+      offscreen_canvas->Clear();
       CopyImageToCanvas(image, offscreen_canvas);
       offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
-      usleep(image.animationDelay() * 10000);  // 1/100s converted to usec
+      usleep(kFrameDelayUs);
     }
   }
 }
