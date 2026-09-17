@@ -23,7 +23,14 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
+#include <dirent.h>
 #include <exception>
+#include <string>
+#include <sys/stat.h>
+#include <vector>
+
 #include <Magick++.h>
 #include <magick/image.h>
 
@@ -39,13 +46,69 @@ static void InterruptHandler(int signo) {
 
 using ImageVector = std::vector<Magick::Image>;
 
+static std::string ToLower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return std::tolower(ch); });
+  return value;
+}
+
+static bool HasImageExtension(const std::string &filename) {
+  const std::string lower = ToLower(filename);
+  return lower.size() >= 4 &&
+         (lower.substr(lower.size() - 4) == ".png" ||
+          lower.substr(lower.size() - 4) == ".jpg" ||
+          lower.substr(lower.size() - 5) == ".jpeg" ||
+          lower.substr(lower.size() - 4) == ".gif" ||
+          lower.substr(lower.size() - 4) == ".bmp");
+}
+
+static std::vector<std::string> ListImageFilesInDirectory(const std::string &dir) {
+  std::vector<std::string> files;
+  DIR *handle = opendir(dir.c_str());
+  if (!handle) {
+    fprintf(stderr, "Failed to open directory '%s'\n", dir.c_str());
+    return files;
+  }
+
+  while (struct dirent *entry = readdir(handle)) {
+    const std::string name = entry->d_name;
+    if (name == "." || name == "..")
+      continue;
+
+    const std::string full_path = dir + "/" + name;
+    if (HasImageExtension(name))
+      files.push_back(full_path);
+  }
+  closedir(handle);
+
+  std::sort(files.begin(), files.end());
+  return files;
+}
+
 // Given the filename, load the image and scale to the size of the
-// matrix.
-// // If this is an animated image, the resutlting vector will contain multiple.
+// matrix. If this is an animated image, the resulting vector will contain
+// multiple frames. For a directory, each image in the directory becomes one
+// frame in the returned list.
 static ImageVector LoadImageAndScaleImage(const char *filename,
                                           int target_width,
                                           int target_height) {
   ImageVector result;
+
+  struct stat st;
+  if (stat(filename, &st) != 0) {
+    fprintf(stderr, "Unable to access '%s'\n", filename);
+    return result;
+  }
+
+  if (S_ISDIR(st.st_mode)) {
+    const std::vector<std::string> files = ListImageFilesInDirectory(filename);
+    for (const std::string &path : files) {
+      Magick::Image image(path);
+      image.scale(Magick::Geometry(target_width, target_height));
+      result.push_back(image);
+    }
+    return result;
+  }
 
   ImageVector frames;
   try {
@@ -57,15 +120,15 @@ static ImageVector LoadImageAndScaleImage(const char *filename,
   }
 
   if (frames.empty()) {
-    fprintf(stderr, "No image found.");
+    fprintf(stderr, "No image found.\n");
     return result;
   }
 
-  // Animated images have partial frames that need to be put together
+  // Animated images have partial frames that need to be put together.
   if (frames.size() > 1) {
     Magick::coalesceImages(&result, frames.begin(), frames.end());
   } else {
-    result.push_back(frames[0]); // just a single still image.
+    result.push_back(frames[0]);
   }
 
   for (Magick::Image &image : result) {
@@ -75,21 +138,24 @@ static ImageVector LoadImageAndScaleImage(const char *filename,
   return result;
 }
 
-
 // Copy an image to a Canvas. Note, the RGBMatrix is implementing the Canvas
 // interface as well as the FrameCanvas we use in the double-buffering of the
-// animted image.
+// animated image.
 void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
   const int offset_x = 0, offset_y = 0;  // If you want to move the image.
-  // Copy all the pixels to the canvas.
   for (size_t y = 0; y < image.rows(); ++y) {
     for (size_t x = 0; x < image.columns(); ++x) {
       const Magick::Color &c = image.pixelColor(x, y);
       if (c.alphaQuantum() < 256) {
-        canvas->SetPixel(x + offset_x, y + offset_y,
-                         ScaleQuantumToChar(c.redQuantum()),
-                         ScaleQuantumToChar(c.greenQuantum()),
-                         ScaleQuantumToChar(c.blueQuantum()));
+        const int red = ScaleQuantumToChar(c.redQuantum());
+        const int green = ScaleQuantumToChar(c.greenQuantum());
+        const int blue = ScaleQuantumToChar(c.blueQuantum());
+
+        if ((red | green | blue) == 0) {
+          continue;  // Skip black pixels: they do not need to be lit.
+        }
+
+        canvas->SetPixel(x + offset_x, y + offset_y, red, green, blue);
       }
     }
   }
@@ -110,7 +176,8 @@ void ShowAnimatedImage(const ImageVector &images, RGBMatrix *matrix) {
 }
 
 int usage(const char *progname) {
-  fprintf(stderr, "Usage: %s [led-matrix-options] <image-filename>\n",
+  fprintf(stderr,
+          "Usage: %s [led-matrix-options] <image-file-or-directory>\n",
           progname);
   rgb_matrix::PrintMatrixFlags(stderr);
   return 1;
@@ -119,8 +186,11 @@ int usage(const char *progname) {
 int main(int argc, char *argv[]) {
   Magick::InitializeMagick(*argv);
 
-  // Initialize the RGB matrix with
+  // Default to a 32x64 matrix for the Raspberry Pi board in this project.
   RGBMatrix::Options matrix_options;
+  matrix_options.rows = 64;
+  matrix_options.cols = 32;
+
   rgb_matrix::RuntimeOptions runtime_opt;
   if (!rgb_matrix::ParseOptionsFromFlags(&argc, &argv,
                                          &matrix_options, &runtime_opt)) {
@@ -144,9 +214,9 @@ int main(int argc, char *argv[]) {
   switch (images.size()) {
   case 0:   // failed to load image.
     break;
-  case 1:   // Simple example: one image to show
+  case 1:   // Simple example: one image to show.
     CopyImageToCanvas(images[0], matrix);
-    while (!interrupt_received) sleep(1000);  // Until Ctrl-C is pressed
+    while (!interrupt_received) sleep(1000);  // Until Ctrl-C is pressed.
     break;
   default:  // More than one image: this is an animation.
     ShowAnimatedImage(images, matrix);
