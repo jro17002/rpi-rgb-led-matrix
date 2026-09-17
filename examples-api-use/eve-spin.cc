@@ -67,8 +67,10 @@ static std::vector<std::string> ListPngFiles(const std::string &path) {
 }
 
 static Magick::Image PrepareImageForMatrix(const Magick::Image &image,
-                                          const RGBMatrix *matrix) {
+                                          const RGBMatrix *matrix,
+                                          int *x_offset) {
   Magick::Image prepared = image;
+  *x_offset = 0;
 
   const bool image_is_portrait = prepared.rows() > prepared.columns();
   const bool matrix_is_landscape = matrix->width() > matrix->height();
@@ -76,9 +78,11 @@ static Magick::Image PrepareImageForMatrix(const Magick::Image &image,
   // Keep tall PNGs aligned with the matrix by rotating them to the display
   // orientation before scaling. The 256x640 images are portrait, while the
   // matrix is typically landscape at 64x32, so rotating once fixes the
-  // sideways rendering.
+  // sideways rendering. Apply a small negative X translation to nudge the
+  // rotated result left by 3 pixels.
   if (image_is_portrait && matrix_is_landscape) {
     prepared.rotate(270.0);
+    *x_offset = -3;
   } else if (!image_is_portrait && !matrix_is_landscape) {
     prepared.rotate(-270.0);
   }
@@ -86,7 +90,8 @@ static Magick::Image PrepareImageForMatrix(const Magick::Image &image,
   return prepared;
 }
 
-static void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
+static void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas,
+                             int x_offset) {
   const int src_w = image.columns();
   const int src_h = image.rows();
 
@@ -100,8 +105,9 @@ static void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
       const int b = ScaleQuantumToChar(color.blueQuantum());
       if ((r | g | b) == 0) continue;
 
-      if (x < canvas->width() && y < canvas->height()) {
-        canvas->SetPixel(x, y, r, g, b);
+      const int out_x = x + x_offset;
+      if (out_x >= 0 && out_x < canvas->width() && y < canvas->height()) {
+        canvas->SetPixel(out_x, y, r, g, b);
       }
     }
   }
@@ -115,11 +121,12 @@ static void ShowImages(const std::vector<std::string> &files, RGBMatrix *matrix)
       if (interrupt_received) return;
 
       Magick::Image image(file);
-      image = PrepareImageForMatrix(image, matrix);
+      int x_offset = 0;
+      image = PrepareImageForMatrix(image, matrix, &x_offset);
       image.scale(Magick::Geometry(matrix->width(), matrix->height()));
 
       frame->Clear();
-      CopyImageToCanvas(image, frame);
+      CopyImageToCanvas(image, frame, x_offset);
       frame = matrix->SwapOnVSync(frame);
       usleep(75000);
     }
