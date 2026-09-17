@@ -117,9 +117,9 @@ int main(int argc, char *argv[]) {
   RGBMatrix::Options matrix_options;
   matrix_options.rows = 64;
   matrix_options.cols = 32;
+  matrix_options.brightness = 70;
 
   rgb_matrix::RuntimeOptions runtime_opt;
-  runtime_opt.brightness = 70;
 
   if (!rgb_matrix::ParseOptionsFromFlags(&argc, &argv, &matrix_options, &runtime_opt)) {
     return usage(argv[0]);
