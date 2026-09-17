@@ -66,6 +66,26 @@ static std::vector<std::string> ListPngFiles(const std::string &path) {
   return files;
 }
 
+static Magick::Image PrepareImageForMatrix(const Magick::Image &image,
+                                          const RGBMatrix *matrix) {
+  Magick::Image prepared = image;
+
+  const bool image_is_portrait = prepared.rows() > prepared.columns();
+  const bool matrix_is_landscape = matrix->width() > matrix->height();
+
+  // Keep tall PNGs aligned with the matrix by rotating them to the display
+  // orientation before scaling. The 256x640 images are portrait, while the
+  // matrix is typically landscape at 64x32, so rotating once fixes the
+  // sideways rendering.
+  if (image_is_portrait && matrix_is_landscape) {
+    prepared.rotate(90.0);
+  } else if (!image_is_portrait && !matrix_is_landscape) {
+    prepared.rotate(-90.0);
+  }
+
+  return prepared;
+}
+
 static void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas) {
   const int src_w = image.columns();
   const int src_h = image.rows();
@@ -95,6 +115,7 @@ static void ShowImages(const std::vector<std::string> &files, RGBMatrix *matrix)
       if (interrupt_received) return;
 
       Magick::Image image(file);
+      image = PrepareImageForMatrix(image, matrix);
       image.scale(Magick::Geometry(matrix->width(), matrix->height()));
 
       frame->Clear();
